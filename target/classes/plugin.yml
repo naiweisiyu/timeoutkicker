@@ -1,0 +1,6 @@
+name: TimeoutKicker
+version: 1.0.0
+main: com.example.timeoutkicker.TimeoutKicker
+api-version: '1.20'
+author: Player
+description: 检测玩家3秒没有发包就踢出
