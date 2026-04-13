@@ -1,4 +1,4 @@
 # timeoutkicker
-一个Minecraft插件用于检测玩家五秒没有发包就踢出玩家，用于防止玩家恶意利用Java虚拟机停止发包Bug，适配1.20.6，服务端Paper
+一个Minecraft插件用于检测玩家五秒没有发包就踢出玩家，用于防止玩家恶意利用Java虚拟机停止发包Bug，适配1.20.6，服务端Paper，务必要安装protocollib.jar作为依赖
 
 作者是个初二在校学生，插件可以用mvn clean package编译，如果大家发现有bug可以提出issue或自行修改提交至master分支，作者有时间都会看的
