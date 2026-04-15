@@ -7,7 +7,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
-import java.util.Arrays;
+import java.lang.reflect.Field;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -19,33 +19,42 @@ public class TimeoutKicker extends JavaPlugin {
     private static TimeoutKicker instance;
     private static final long TIMEOUT_MS = 5000;
     private final Map<UUID, Long> lastPacketTime = new ConcurrentHashMap<>();
+    private final Map<UUID, Integer> anomalyCount = new ConcurrentHashMap<>();
+    private static final int MAX_ANOMALY_COUNT = 5;
 
     @Override
     public void onEnable() {
         instance = this;
 
-        Set<PacketType> clientPacketTypes = new HashSet<>(Arrays.asList(
-                PacketType.Play.Client.KEEP_ALIVE,
-                PacketType.Play.Client.CHAT,
-                PacketType.Play.Client.ENTITY_ACTION,
-                PacketType.Play.Client.BLOCK_DIG,
-                PacketType.Play.Client.BLOCK_PLACE,
-                PacketType.Play.Client.USE_ITEM,
-                PacketType.Play.Client.ARM_ANIMATION
-        ));
+        Set<PacketType> clientPacketTypes = getAllPacketTypes(PacketType.Play.Client.class);
+        Set<PacketType> serverPacketTypes = getAllPacketTypes(PacketType.Play.Server.class);
 
         com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
                 .addPacketListener(new PacketAdapter(this, clientPacketTypes) {
                     @Override
                     public void onPacketReceiving(PacketEvent event) {
-                        if (event.getPlayer() != null) {
-                            UUID uuid = event.getPlayer().getUniqueId();
-                            lastPacketTime.put(uuid, System.currentTimeMillis());
+                        if (event.getPlayer() == null) {
+                            return;
+                        }
+
+                        UUID uuid = event.getPlayer().getUniqueId();
+                        lastPacketTime.put(uuid, System.currentTimeMillis());
+
+                        if (!isPacketValid(event)) {
+                            handleAnomaly(event.getPlayer(), event.getPacketType().toString());
                         }
                     }
+                });
 
+        com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
+                .addPacketListener(new PacketAdapter(this, serverPacketTypes) {
                     @Override
                     public void onPacketSending(PacketEvent event) {
+                        if (event.getPlayer() == null) {
+                            return;
+                        }
+
+                        isPacketValid(event);
                     }
                 });
 
@@ -77,5 +86,43 @@ public class TimeoutKicker extends JavaPlugin {
     @Override
     public void onDisable() {
         lastPacketTime.clear();
+        anomalyCount.clear();
+    }
+
+    private boolean isPacketValid(PacketEvent event) {
+        try {
+            event.getPacket().getModifier().read(0);
+            return true;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private Set<PacketType> getAllPacketTypes(Class<?> packetClass) {
+        Set<PacketType> types = new HashSet<>();
+        for (Field field : packetClass.getDeclaredFields()) {
+            try {
+                field.setAccessible(true);
+                Object value = field.get(null);
+                if (value instanceof PacketType) {
+                    types.add((PacketType) value);
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return types;
+    }
+
+    private void handleAnomaly(Player player, String packetType) {
+        UUID uuid = player.getUniqueId();
+        int count = anomalyCount.getOrDefault(uuid, 0) + 1;
+        anomalyCount.put(uuid, count);
+
+        getLogger().warning("玩家 " + player.getName() + " 发送了异常数据包 [" + packetType + "] (累计: " + count + "/" + MAX_ANOMALY_COUNT + ")");
+
+        if (count >= MAX_ANOMALY_COUNT) {
+            player.kickPlayer("异常数据包");
+            anomalyCount.remove(uuid);
+        }
     }
 }
