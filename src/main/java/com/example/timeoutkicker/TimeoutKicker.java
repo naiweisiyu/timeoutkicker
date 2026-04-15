@@ -17,68 +17,98 @@ import java.util.concurrent.ConcurrentHashMap;
 public class TimeoutKicker extends JavaPlugin {
 
     private static TimeoutKicker instance;
-    private static final long TIMEOUT_MS = 5000;
     private final Map<UUID, Long> lastPacketTime = new ConcurrentHashMap<>();
     private final Map<UUID, Integer> anomalyCount = new ConcurrentHashMap<>();
-    private static final int MAX_ANOMALY_COUNT = 5;
+
+    private boolean timeoutEnabled;
+    private int timeoutSeconds;
+    private String timeoutKickMessage;
+    private boolean packetAnomalyEnabled;
+    private int maxAnomalyCount;
+    private String packetKickMessage;
+    private boolean verboseLogging;
 
     @Override
     public void onEnable() {
         instance = this;
 
-        Set<PacketType> clientPacketTypes = getAllPacketTypes(PacketType.Play.Client.class);
-        Set<PacketType> serverPacketTypes = getAllPacketTypes(PacketType.Play.Server.class);
+        saveDefaultConfig();
+        loadConfig();
 
-        com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
-                .addPacketListener(new PacketAdapter(this, clientPacketTypes) {
-                    @Override
-                    public void onPacketReceiving(PacketEvent event) {
-                        if (event.getPlayer() == null) {
-                            return;
+        if (timeoutEnabled) {
+            Set<PacketType> clientPacketTypes = getAllPacketTypes(PacketType.Play.Client.class);
+
+            com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
+                    .addPacketListener(new PacketAdapter(this, clientPacketTypes) {
+                        @Override
+                        public void onPacketReceiving(PacketEvent event) {
+                            if (event.getPlayer() == null) {
+                                return;
+                            }
+
+                            UUID uuid = event.getPlayer().getUniqueId();
+                            lastPacketTime.put(uuid, System.currentTimeMillis());
+
+                            if (packetAnomalyEnabled && !isPacketValid(event)) {
+                                handleAnomaly(event.getPlayer(), event.getPacketType().toString());
+                            }
+                        }
+                    });
+
+            new BukkitRunnable() {
+                @Override
+                public void run() {
+                    long currentTime = System.currentTimeMillis();
+                    long cutoffTime = currentTime - (timeoutSeconds * 1000L);
+
+                    for (Player player : getServer().getOnlinePlayers()) {
+                        UUID uuid = player.getUniqueId();
+                        Long lastTime = lastPacketTime.get(uuid);
+
+                        if (lastTime == null) {
+                            continue;
                         }
 
-                        UUID uuid = event.getPlayer().getUniqueId();
-                        lastPacketTime.put(uuid, System.currentTimeMillis());
-
-                        if (!isPacketValid(event)) {
-                            handleAnomaly(event.getPlayer(), event.getPacketType().toString());
+                        if (lastTime < cutoffTime) {
+                            player.kickPlayer(timeoutKickMessage);
+                            lastPacketTime.remove(uuid);
                         }
-                    }
-                });
-
-        com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
-                .addPacketListener(new PacketAdapter(this, serverPacketTypes) {
-                    @Override
-                    public void onPacketSending(PacketEvent event) {
-                        if (event.getPlayer() == null) {
-                            return;
-                        }
-
-                        isPacketValid(event);
-                    }
-                });
-
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                long currentTime = System.currentTimeMillis();
-                long cutoffTime = currentTime - TIMEOUT_MS;
-
-                for (Player player : getServer().getOnlinePlayers()) {
-                    UUID uuid = player.getUniqueId();
-                    Long lastTime = lastPacketTime.get(uuid);
-
-                    if (lastTime == null) {
-                        continue;
-                    }
-
-                    if (lastTime < cutoffTime) {
-                        player.kickPlayer("§c连接超时: 5秒内无响应");
-                        lastPacketTime.remove(uuid);
                     }
                 }
-            }
-        }.runTaskTimer(this, 1L, 1L);
+            }.runTaskTimer(this, 1L, 1L);
+        } else if (packetAnomalyEnabled) {
+            Set<PacketType> clientPacketTypes = getAllPacketTypes(PacketType.Play.Client.class);
+
+            com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
+                    .addPacketListener(new PacketAdapter(this, clientPacketTypes) {
+                        @Override
+                        public void onPacketReceiving(PacketEvent event) {
+                            if (event.getPlayer() == null) {
+                                return;
+                            }
+
+                            if (!isPacketValid(event)) {
+                                handleAnomaly(event.getPlayer(), event.getPacketType().toString());
+                            }
+                        }
+                    });
+        }
+
+        if (packetAnomalyEnabled) {
+            Set<PacketType> serverPacketTypes = getAllPacketTypes(PacketType.Play.Server.class);
+
+            com.comphenix.protocol.ProtocolLibrary.getProtocolManager()
+                    .addPacketListener(new PacketAdapter(this, serverPacketTypes) {
+                        @Override
+                        public void onPacketSending(PacketEvent event) {
+                            if (event.getPlayer() == null) {
+                                return;
+                            }
+
+                            isPacketValid(event);
+                        }
+                    });
+        }
 
         getLogger().info("TimeoutKicker 已启用!");
     }
@@ -87,6 +117,18 @@ public class TimeoutKicker extends JavaPlugin {
     public void onDisable() {
         lastPacketTime.clear();
         anomalyCount.clear();
+    }
+
+    private void loadConfig() {
+        timeoutEnabled = getConfig().getBoolean("timeout.enabled", true);
+        timeoutSeconds = getConfig().getInt("timeout.timeout-seconds", 5);
+        timeoutKickMessage = getConfig().getString("timeout.kick-message", "§c连接超时");
+
+        packetAnomalyEnabled = getConfig().getBoolean("packet-anomaly.enabled", true);
+        maxAnomalyCount = getConfig().getInt("packet-anomaly.max-anomaly-count", 5);
+        packetKickMessage = getConfig().getString("packet-anomaly.kick-message", "异常数据包");
+
+        verboseLogging = getConfig().getBoolean("logging.verbose", true);
     }
 
     private boolean isPacketValid(PacketEvent event) {
@@ -118,10 +160,12 @@ public class TimeoutKicker extends JavaPlugin {
         int count = anomalyCount.getOrDefault(uuid, 0) + 1;
         anomalyCount.put(uuid, count);
 
-        getLogger().warning("玩家 " + player.getName() + " 发送了异常数据包 [" + packetType + "] (累计: " + count + "/" + MAX_ANOMALY_COUNT + ")");
+        if (verboseLogging) {
+            getLogger().warning("玩家 " + player.getName() + " 发送了异常数据包 [" + packetType + "] (累计: " + count + "/" + maxAnomalyCount + ")");
+        }
 
-        if (count >= MAX_ANOMALY_COUNT) {
-            player.kickPlayer("异常数据包");
+        if (count >= maxAnomalyCount) {
+            player.kickPlayer(packetKickMessage);
             anomalyCount.remove(uuid);
         }
     }

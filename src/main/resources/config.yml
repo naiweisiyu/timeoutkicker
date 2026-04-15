@@ -1,0 +1,24 @@
+# TimeoutKicker 配置文件
+
+# 超时检测设置
+timeout:
+  # 是否开启超时检测
+  enabled: true
+  # 超时时间（秒），超过此时间没有收到数据包则踢出玩家
+  timeout-seconds: 5
+  # 超时踢出时的消息
+  kick-message: "§c连接超时"
+
+# 数据包异常检测设置
+packet-anomaly:
+  # 是否开启数据包异常检测
+  enabled: true
+  # 累计异常数据包次数达到此值时踢出玩家
+  max-anomaly-count: 5
+  # 异常数据包踢出时的消息
+  kick-message: "异常数据包"
+
+# 日志设置
+logging:
+  # 是否打印异常数据包警告到控制台
+  verbose: true
